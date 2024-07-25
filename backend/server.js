@@ -184,7 +184,7 @@ app.post('/add-diary', async (req, res) => {
   }
 });
 
-// 다이어리 조회 엔드포인트
+// 다이어리 목록 조회 엔드포인트
 app.get('/get-diaries', async (req, res) => {
   const { user_id } = req.query;
 
@@ -223,6 +223,32 @@ app.delete('/delete-diary/:id', async (req, res) => {
     res.json({ isSuccess: true, message: '일기 삭제 성공' });
   } catch (err) {
     console.error('Error deleting diary:', err);
+    res.status(500).json({ isSuccess: false, message: 'Server error: ' + err.message });
+  }
+});
+
+// 다이어리 상세 조회 엔드포인트
+app.get('/get-diary/:id', async (req, res) => {
+  const { id } = req.params;
+  const token = req.headers.authorization?.split(' ')[1]; // Assuming Bearer token
+
+  if (!token) {
+    return res.status(401).json({ isSuccess: false, message: 'Unauthorized' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, secretKey);
+    const connection = await mysql.createConnection(dbConfig);
+    const [results] = await connection.execute('SELECT * FROM diary WHERE id = ? AND user_id = ?', [id, decoded.user_id]);
+    await connection.end();
+
+    if (results.length === 0) {
+      return res.status(404).json({ isSuccess: false, message: 'Diary not found' });
+    }
+
+    res.json({ diary: results[0] });
+  } catch (err) {
+    console.error('Error fetching diary:', err);
     res.status(500).json({ isSuccess: false, message: 'Server error: ' + err.message });
   }
 });
