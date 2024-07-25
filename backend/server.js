@@ -155,6 +155,78 @@ app.post('/change-password', async (req, res) => {
   }
 });
 
+// 다이어리 추가 엔드포인트
+app.post('/add-diary', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1]; // Assuming Bearer token
+
+  if (!token) {
+    return res.status(401).json({ isSuccess: false, message: 'Unauthorized' });
+  }
+
+  const { date, title, content, one } = req.body;
+
+  if (!date || !title || !content) {
+    return res.status(400).json({ isSuccess: false, message: '모든 필드를 입력해주세요.' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, secretKey);
+    const connection = await mysql.createConnection(dbConfig);
+    const [result] = await connection.execute(
+      'INSERT INTO diary (user_id, date, title, content, one) VALUES (?, ?, ?, ?, ?)',
+      [decoded.user_id, date, title, content, one]
+    );
+    await connection.end();
+    res.status(201).json({ isSuccess: true, message: '일기 추가 성공' });
+  } catch (err) {
+    console.error('Error adding diary:', err);
+    res.status(500).json({ isSuccess: false, message: 'Server error: ' + err.message });
+  }
+});
+
+// 다이어리 조회 엔드포인트
+app.get('/get-diaries', async (req, res) => {
+  const { user_id } = req.query;
+
+  if (!user_id) {
+    return res.status(400).json({ isSuccess: false, message: 'user_id를 제공해야 합니다.' });
+  }
+
+  try {
+    const connection = await mysql.createConnection(dbConfig);
+    const [results] = await connection.execute('SELECT id, title, date FROM diary WHERE user_id = ?', [user_id]);
+    await connection.end();
+    res.json({ diaries: results });
+  } catch (err) {
+    console.error('Error fetching diaries:', err);
+    res.status(500).json({ isSuccess: false, message: 'Server error: ' + err.message });
+  }
+});
+
+// 다이어리 삭제 엔드포인트
+app.delete('/delete-diary/:id', async (req, res) => {
+  const { id } = req.params;
+
+  if (!id) {
+    return res.status(400).json({ isSuccess: false, message: 'id를 제공해야 합니다.' });
+  }
+
+  try {
+    const connection = await mysql.createConnection(dbConfig);
+    const [result] = await connection.execute('DELETE FROM diary WHERE id = ?', [id]);
+    await connection.end();
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ isSuccess: false, message: '일기를 찾을 수 없습니다.' });
+    }
+
+    res.json({ isSuccess: true, message: '일기 삭제 성공' });
+  } catch (err) {
+    console.error('Error deleting diary:', err);
+    res.status(500).json({ isSuccess: false, message: 'Server error: ' + err.message });
+  }
+});
+
 // 서버 시작
 app.listen(port, () => {
   console.log(`서버가 http://localhost:${port} 에서 실행 중입니다.`);
