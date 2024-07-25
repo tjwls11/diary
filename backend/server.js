@@ -80,20 +80,12 @@ app.post('/login', async (req, res) => {
     // 로그인 성공 시 JWT 토큰 발급
     const token = jwt.sign({ user_id: user.user_id, name: user.name }, secretKey, { expiresIn: '1h' });
     await connection.end();
-
-    // 응답에 사용자 정보와 토큰을 포함
-    res.json({ 
-      isSuccess: true, 
-      message: '로그인 성공', 
-      token, 
-      user: { user_id: user.user_id, name: user.name } 
-    });
+    res.json({ isSuccess: true, message: '로그인 성공', token, user: { user_id: user.user_id, name: user.name } });
   } catch (err) {
     console.error('서버 오류:', err);
     res.status(500).json({ isSuccess: false, message: '서버 오류: ' + err.message });
   }
 });
-
 
 // 다이어리 추가 엔드포인트
 app.post('/add-diary', async (req, res) => {
@@ -134,10 +126,7 @@ app.get('/get-diaries', async (req, res) => {
 
   try {
     const connection = await mysql.createConnection(dbConfig);
-    const [results] = await connection.execute(
-      'SELECT date, title FROM diary WHERE user_id = ?',
-      [user_id]
-    );
+    const [results] = await connection.execute('SELECT id, title, date FROM diary WHERE user_id = ?', [user_id]);
     await connection.end();
     res.json({ diaries: results });
   } catch (err) {
@@ -145,7 +134,6 @@ app.get('/get-diaries', async (req, res) => {
     res.status(500).json({ isSuccess: false, message: '서버 오류: ' + err.message });
   }
 });
-
 
 // 다이어리 삭제 엔드포인트
 app.delete('/delete-diary/:id', async (req, res) => {
