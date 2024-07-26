@@ -1,4 +1,4 @@
-require('dotenv').config(); // 환경 변수 로딩
+require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2/promise');
 const bodyParser = require('body-parser');
@@ -9,7 +9,7 @@ const jwt = require('jsonwebtoken');
 const app = express();
 const port = process.env.PORT || 3011;
 const saltRounds = 10;
-const secretKey = process.env.SECRET_KEY || 'default_secret'; // 환경 변수로 관리
+const secretKey = process.env.SECRET_KEY || 'default_secret';
 
 // 미들웨어 설정
 app.use(cors());
@@ -190,7 +190,11 @@ app.get('/get-diaries', authenticateToken, async (req, res) => {
   let connection;
   try {
     connection = await mysql.createConnection(dbConfig);
-    const [results] = await connection.execute('SELECT `id`, `title`, `date` FROM `diary` WHERE `user_id` = ?', [req.user.user_id]);
+    // 현재 요청하는 사용자의 일기만 조회
+    const [results] = await connection.execute(
+      'SELECT `id`, `title`, `date` FROM `diary` WHERE `user_id` = ?',
+      [req.user.user_id]
+    );
     res.json({ diaries: results });
   } catch (err) {
     console.error('Error fetching diaries:', err);
@@ -199,6 +203,37 @@ app.get('/get-diaries', authenticateToken, async (req, res) => {
     if (connection) connection.end();
   }
 });
+
+// 다이어리 상세 조회 엔드포인트
+app.get('/get-diary/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+
+  if (!id) {
+    return res.status(400).json({ isSuccess: false, message: 'Diary id is required' });
+  }
+
+  let connection;
+  try {
+    connection = await mysql.createConnection(dbConfig);
+    // 특정 일기 조회
+    const [results] = await connection.execute(
+      'SELECT * FROM `diary` WHERE `id` = ? AND `user_id` = ?',
+      [id, req.user.user_id]
+    );
+
+    if (results.length === 0) {
+      return res.status(404).json({ isSuccess: false, message: 'Diary not found or you are not authorized to view it' });
+    }
+
+    res.json({ diary: results[0] });
+  } catch (err) {
+    console.error('Error fetching diary:', err);
+    res.status(500).json({ isSuccess: false, message: 'Server error: ' + err.message });
+  } finally {
+    if (connection) connection.end();
+  }
+});
+
 
 // 다이어리 삭제 엔드포인트
 app.delete('/delete-diary/:id', authenticateToken, async (req, res) => {
@@ -237,7 +272,7 @@ app.get('/api/notes', async (req, res) => {
   let connection;
   try {
     connection = await mysql.createConnection(dbConfig);
-    const [results] = await connection.execute('SELECT `one` FROM `diary` WHERE `date` = ?', [date]);
+    const [results] = await connection.execute('SELECT `one` FROM `diary` WHERE `date` = ? AND `user_id` = ?', [date, req.user.user_id]);
 
     if (results.length === 0) {
       return res.status(404).json({ isSuccess: false, message: 'Note not found' });
