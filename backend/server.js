@@ -11,8 +11,14 @@ const port = process.env.PORT || 3011;
 const saltRounds = 10;
 const secretKey = process.env.SECRET_KEY || 'default_secret';
 
-// 미들웨어 설정
-app.use(cors());
+// CORS 설정
+const corsOptions = {
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+};
+
+app.use(cors(corsOptions));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
@@ -24,17 +30,19 @@ const dbConfig = {
   database: process.env.DB_NAME || 'souldiary'
 };
 
+const pool = mysql.createPool(dbConfig);
+
 // JWT 인증 미들웨어
 const authenticateToken = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1]; // Assuming Bearer token
-
-  if (!token) {
-    return res.status(401).json({ isSuccess: false, message: 'Unauthorized' });
-  }
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  
+  if (token == null) return res.sendStatus(401); // 인증되지 않음
 
   jwt.verify(token, secretKey, (err, user) => {
     if (err) {
-      return res.status(403).json({ isSuccess: false, message: 'Forbidden' });
+      console.error('JWT verification failed:', err);
+      return res.sendStatus(403); // 금지됨
     }
     req.user = user;
     next();
@@ -51,24 +59,16 @@ app.post('/signup', async (req, res) => {
   const { name, user_id, password } = req.body;
 
   if (!name || !user_id || !password) {
-    return res.status(400).json({ isSuccess: false, message: '모든 필드를 입력해주세요.' });
+    return res.status(400).json({ isSuccess: false, message: 'All fields are required.' });
   }
 
-  let connection;
   try {
-    connection = await mysql.createConnection(dbConfig);
     const hash = await bcrypt.hash(password, saltRounds);
-
-    await connection.execute(
-      'INSERT INTO `user` (`name`, `user_id`, `password`) VALUES (?, ?, ?)',
-      [name, user_id, hash]
-    );
-    res.status(201).json({ isSuccess: true, message: '사용자 생성 성공' });
+    await pool.query('INSERT INTO `user` (`name`, `user_id`, `password`) VALUES (?, ?, ?)', [name, user_id, hash]);
+    res.status(201).json({ isSuccess: true, message: 'User created successfully' });
   } catch (err) {
-    console.error('사용자 생성 실패:', err);
-    res.status(500).json({ isSuccess: false, message: '서버 오류: ' + err.message });
-  } finally {
-    if (connection) connection.end();
+    console.error('Error creating user:', err);
+    res.status(500).json({ isSuccess: false, message: 'Server error: ' + err.message });
   }
 });
 
@@ -77,41 +77,35 @@ app.post('/login', async (req, res) => {
   const { user_id, password } = req.body;
 
   if (!user_id || !password) {
-    return res.status(400).json({ isSuccess: false, message: '모든 필드를 입력해주세요.' });
+    return res.status(400).json({ isSuccess: false, message: 'All fields are required.' });
   }
 
-  let connection;
   try {
-    connection = await mysql.createConnection(dbConfig);
-    const [results] = await connection.execute('SELECT * FROM `user` WHERE `user_id` = ?', [user_id]);
+    const [results] = await pool.query('SELECT * FROM `user` WHERE `user_id` = ?', [user_id]);
 
     if (results.length === 0) {
-      return res.status(401).json({ isSuccess: false, message: '사용자 없음' });
+      return res.status(401).json({ isSuccess: false, message: 'User not found' });
     }
 
     const user = results[0];
     const isMatch = await bcrypt.compare(password, user.password);
 
     if (!isMatch) {
-      return res.status(401).json({ isSuccess: false, message: '비밀번호 불일치' });
+      return res.status(401).json({ isSuccess: false, message: 'Invalid password' });
     }
 
     const token = jwt.sign({ user_id: user.user_id, name: user.name }, secretKey, { expiresIn: '1h' });
-    res.json({ isSuccess: true, message: '로그인 성공', token, user: { user_id: user.user_id, name: user.name } });
+    res.json({ isSuccess: true, message: 'Login successful', token, user: { user_id: user.user_id, name: user.name } });
   } catch (err) {
-    console.error('서버 오류:', err);
-    res.status(500).json({ isSuccess: false, message: '서버 오류: ' + err.message });
-  } finally {
-    if (connection) connection.end();
+    console.error('Server error:', err);
+    res.status(500).json({ isSuccess: false, message: 'Server error: ' + err.message });
   }
 });
 
 // 사용자 정보 조회 엔드포인트
 app.get('/user-info', authenticateToken, async (req, res) => {
-  let connection;
   try {
-    connection = await mysql.createConnection(dbConfig);
-    const [results] = await connection.execute('SELECT `name`, `user_id`, `coin` FROM `user` WHERE `user_id` = ?', [req.user.user_id]);
+    const [results] = await pool.query('SELECT `name`, `user_id`, `coin` FROM `user` WHERE `user_id` = ?', [req.user.user_id]);
 
     if (results.length === 0) {
       return res.status(404).json({ isSuccess: false, message: 'User not found' });
@@ -121,8 +115,6 @@ app.get('/user-info', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('Error fetching user info:', err);
     res.status(500).json({ isSuccess: false, message: 'Server error: ' + err.message });
-  } finally {
-    if (connection) connection.end();
   }
 });
 
@@ -134,10 +126,8 @@ app.post('/change-password', authenticateToken, async (req, res) => {
     return res.status(400).json({ isSuccess: false, message: 'All fields are required' });
   }
 
-  let connection;
   try {
-    connection = await mysql.createConnection(dbConfig);
-    const [results] = await connection.execute('SELECT `password` FROM `user` WHERE `user_id` = ?', [req.user.user_id]);
+    const [results] = await pool.query('SELECT `password` FROM `user` WHERE `user_id` = ?', [req.user.user_id]);
 
     if (results.length === 0) {
       return res.status(404).json({ isSuccess: false, message: 'User not found' });
@@ -151,13 +141,11 @@ app.post('/change-password', authenticateToken, async (req, res) => {
     }
 
     const hash = await bcrypt.hash(newPassword, saltRounds);
-    await connection.execute('UPDATE `user` SET `password` = ? WHERE `user_id` = ?', [hash, req.user.user_id]);
+    await pool.query('UPDATE `user` SET `password` = ? WHERE `user_id` = ?', [hash, req.user.user_id]);
     res.json({ isSuccess: true, message: 'Password updated successfully' });
   } catch (err) {
     console.error('Error changing password:', err);
     res.status(500).json({ isSuccess: false, message: 'Server error: ' + err.message });
-  } finally {
-    if (connection) connection.end();
   }
 });
 
@@ -166,41 +154,26 @@ app.post('/add-diary', authenticateToken, async (req, res) => {
   const { date, title, content, one } = req.body;
 
   if (!date || !title || !content) {
-    return res.status(400).json({ isSuccess: false, message: '모든 필드를 입력해주세요.' });
+    return res.status(400).json({ isSuccess: false, message: 'All fields are required.' });
   }
 
-  let connection;
   try {
-    connection = await mysql.createConnection(dbConfig);
-    await connection.execute(
-      'INSERT INTO `diary` (`user_id`, `date`, `title`, `content`, `one`) VALUES (?, ?, ?, ?, ?)',
-      [req.user.user_id, date, title, content, one]
-    );
-    res.status(201).json({ isSuccess: true, message: '일기 추가 성공' });
+    await pool.query('INSERT INTO `diary` (`user_id`, `date`, `title`, `content`, `one`) VALUES (?, ?, ?, ?, ?)', [req.user.user_id, date, title, content, one]);
+    res.status(201).json({ isSuccess: true, message: 'Diary added successfully' });
   } catch (err) {
     console.error('Error adding diary:', err);
     res.status(500).json({ isSuccess: false, message: 'Server error: ' + err.message });
-  } finally {
-    if (connection) connection.end();
   }
 });
 
 // 다이어리 목록 조회 엔드포인트
 app.get('/get-diaries', authenticateToken, async (req, res) => {
-  let connection;
   try {
-    connection = await mysql.createConnection(dbConfig);
-    // 현재 요청하는 사용자의 일기만 조회
-    const [results] = await connection.execute(
-      'SELECT `id`, `title`, `date` FROM `diary` WHERE `user_id` = ?',
-      [req.user.user_id]
-    );
+    const [results] = await pool.query('SELECT `id`, `title`, `date` FROM `diary` WHERE `user_id` = ?', [req.user.user_id]);
     res.json({ diaries: results });
   } catch (err) {
     console.error('Error fetching diaries:', err);
     res.status(500).json({ isSuccess: false, message: 'Server error: ' + err.message });
-  } finally {
-    if (connection) connection.end();
   }
 });
 
@@ -212,14 +185,8 @@ app.get('/get-diary/:id', authenticateToken, async (req, res) => {
     return res.status(400).json({ isSuccess: false, message: 'Diary id is required' });
   }
 
-  let connection;
   try {
-    connection = await mysql.createConnection(dbConfig);
-    // 특정 일기 조회
-    const [results] = await connection.execute(
-      'SELECT * FROM `diary` WHERE `id` = ? AND `user_id` = ?',
-      [id, req.user.user_id]
-    );
+    const [results] = await pool.query('SELECT * FROM `diary` WHERE `id` = ? AND `user_id` = ?', [id, req.user.user_id]);
 
     if (results.length === 0) {
       return res.status(404).json({ isSuccess: false, message: 'Diary not found or you are not authorized to view it' });
@@ -229,64 +196,100 @@ app.get('/get-diary/:id', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('Error fetching diary:', err);
     res.status(500).json({ isSuccess: false, message: 'Server error: ' + err.message });
-  } finally {
-    if (connection) connection.end();
   }
 });
-
 
 // 다이어리 삭제 엔드포인트
 app.delete('/delete-diary/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
 
   if (!id) {
-    return res.status(400).json({ isSuccess: false, message: 'id를 제공해야 합니다.' });
+    return res.status(400).json({ isSuccess: false, message: 'Diary id is required.' });
   }
 
-  let connection;
   try {
-    connection = await mysql.createConnection(dbConfig);
-    const [result] = await connection.execute('DELETE FROM `diary` WHERE `id` = ?', [id]);
+    const [results] = await pool.query('DELETE FROM `diary` WHERE `id` = ? AND `user_id` = ?', [id, req.user.user_id]);
 
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ isSuccess: false, message: '일기를 찾을 수 없습니다.' });
+    if (results.affectedRows === 0) {
+      return res.status(404).json({ isSuccess: false, message: 'Diary not found or you are not authorized to delete it' });
     }
 
-    res.json({ isSuccess: true, message: '일기 삭제 성공' });
+    res.json({ isSuccess: true, message: 'Diary deleted successfully' });
   } catch (err) {
     console.error('Error deleting diary:', err);
     res.status(500).json({ isSuccess: false, message: 'Server error: ' + err.message });
-  } finally {
-    if (connection) connection.end();
   }
 });
 
-// 날짜별 한 줄 요약 가져오기 엔드포인트
-app.get('/api/notes', async (req, res) => {
-  const { date } = req.query;
+// 무드 트래커 기능 엔드포인트
+// 감정 상태 색상 저장
+app.post('/set-mood', authenticateToken, async (req, res) => {
+  const { date, color } = req.body;
 
-  if (!date) {
-    return res.status(400).json({ isSuccess: false, message: 'date를 제공해야 합니다.' });
+  if (!date || !color) {
+    return res.status(400).json({ isSuccess: false, message: 'Date and color are required.' });
   }
 
-  let connection;
   try {
-    connection = await mysql.createConnection(dbConfig);
-    const [results] = await connection.execute('SELECT `one` FROM `diary` WHERE `date` = ? AND `user_id` = ?', [date, req.user.user_id]);
+    await pool.query('INSERT INTO `calendar` (`user_id`, `date`, `color`) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE `color` = ?', [req.user.user_id, date, color, color]);
+    res.status(201).json({ isSuccess: true, message: 'Mood color set successfully' });
+  } catch (err) {
+    console.error('Error setting mood color:', err);
+    res.status(500).json({ isSuccess: false, message: 'Server error: ' + err.message });
+  }
+});
+
+// 무드 트래커 기능 엔드포인트
+// 특정 날짜의 감정 상태 색상 조회
+app.get('/get-mood/:date', authenticateToken, async (req, res) => {
+  const { date } = req.params;
+
+  if (!date) {
+    return res.status(400).json({ isSuccess: false, message: 'Date is required.' });
+  }
+
+  try {
+    const [results] = await pool.query('SELECT `color` FROM `calendar` WHERE `user_id` = ? AND `date` = ?', [req.user.user_id, date]);
 
     if (results.length === 0) {
-      return res.status(404).json({ isSuccess: false, message: 'Note not found' });
+      return res.status(404).json({ isSuccess: false, message: 'Mood color not found for this date' });
     }
 
-    res.json({ one: results[0].one });
+    res.json({ isSuccess: true, color: results[0].color });
   } catch (err) {
-    console.error('Error fetching note:', err);
+    console.error('Error fetching mood color:', err);
     res.status(500).json({ isSuccess: false, message: 'Server error: ' + err.message });
-  } finally {
-    if (connection) connection.end();
+  }
+});
+
+// 특정 기간 동안의 감정 상태 색상 조회
+app.get('/get-mood-range', authenticateToken, async (req, res) => {
+  const { startDate, endDate } = req.query;
+
+  if (!startDate || !endDate) {
+    return res.status(400).json({ isSuccess: false, message: 'Start date and end date are required.' });
+  }
+
+  // 날짜 형식 검증
+  const isValidDate = (date) => !isNaN(Date.parse(date));
+  if (!isValidDate(startDate) || !isValidDate(endDate)) {
+    return res.status(400).json({ isSuccess: false, message: 'Invalid date format.' });
+  }
+
+  try {
+    const [results] = await pool.query('SELECT `date`, `color` FROM `calendar` WHERE `user_id` = ? AND `date` BETWEEN ? AND ?', [req.user.user_id, startDate, endDate]);
+
+    if (results.length === 0) {
+      return res.status(404).json({ isSuccess: false, message: 'No mood colors found for the given range.' });
+    }
+
+    res.json({ isSuccess: true, moods: results });
+  } catch (err) {
+    console.error('Error fetching mood range:', err);
+    res.status(500).json({ isSuccess: false, message: 'Server error: ' + err.message });
   }
 });
 
 app.listen(port, () => {
-  console.log(`Server is running on http://localhost:${port}`);
+  console.log(`Server running on http://localhost:${port}`);
 });
